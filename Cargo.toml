@@ -1,8 +1,11 @@
 [package]
-name = "coppermind"
+name = "chat_plus_plus"
 version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-axum = { version = "0.8.6", features = ["ws"] }
 tokio = { version = "1.47.1", features = ["full"] }
+tokio-tungstenite = "*"
+futures = "0.3.31"
+log = "0.4.28"
+env_logger = "0.11.8"
