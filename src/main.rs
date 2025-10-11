@@ -5,7 +5,7 @@
  * shoutout to RGGH on github who (through his video) helped me understand how to make websockets
  * in rust.
  */
-use log::{info, trace, warn, debug};
+use log::{info, warn, debug};
 use tokio::sync::Mutex;
 use futures::SinkExt;
 use tokio::net::TcpListener;
@@ -29,6 +29,7 @@ pub type ClientTxGroup = Arc<Mutex<HashMap<usize, Client>>>;
 /// enum for the type of client connected, relays will be sent messages regaurdless of the
 /// channel, while clients are only sent ones in their matching channel 
 #[derive(PartialEq, Debug)] // to do `==` comparisons
+#[allow(dead_code)] // because relay isn't "truely used yet"
 enum ClientType {
     RELAY,
     CLIENT,
