@@ -108,22 +108,26 @@ pub async fn broadcast(clients: &ClientTxGroup, message: RelayMessage) {
 
 /// Append a client to the list of clients.
 /// Expects a transmit element of a stream and the last appeneded index (for hashmap) as well as the client group (borrowed)
-pub async fn append_client(tx: Tx, clients: &ClientTxGroup, mut lastindex: usize) -> usize {
+pub async fn append_client(tx: Tx, clients: &ClientTxGroup, newindex: usize) {
     debug!("adding client to list");
-    lastindex += 1; 
     let mut locked = clients.lock().await;
-    locked.insert(lastindex, Client { 
+    locked.insert(newindex, Client { 
         transmit: tx,
         activechannel: 0,
         config: ClientType::CLIENT, 
     });
-
-    lastindex
 }
 
 /// handler for after a client connects
 async fn handle_client(stream: tokio::net::TcpStream, clients: ClientTxGroup, lastindex: Arc<Mutex<usize>>) {
-    let ws_stream = accept_async(stream).await.unwrap();
+    let ws_stream = match accept_async(stream).await {
+        Ok(ws) => ws,
+        Err(e) => {
+            warn!("Websocket handshake failed {:?}", e);
+            return;
+        }
+    };
+
     let (write, mut read) = ws_stream.split();
     info!("New WebSocket connection established");
     
@@ -137,9 +141,17 @@ async fn handle_client(stream: tokio::net::TcpStream, clients: ClientTxGroup, la
     broadcast(&clients, RelayMessage { content: "New Client joined YAyyyy".to_string(), channel: 0 }).await;
 
     // Handle incoming messages (if necessary)
-    while let Some(Ok(msg)) = read.next().await {
+    while let Some(msg) = read.next().await {
         // In this example, we don't need to handle incoming messages
-        info!("Message from client {}", msg);
+        match msg {
+            Ok(Message::Close(_)) => break,
+            Ok(Message::Ping(_)) => info!("pinged"),
+            Ok(Message::Text(ref m)) => info!("message from client: {}", m),
+            Err(e) => warn!("Error recieving client's message: {:?}", e),
+            _ => info!("message of other type recieved"),
+        }
     }
+
+    debug!("Client disconnected.");
 }
 
