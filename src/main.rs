@@ -5,51 +5,135 @@
  * shoutout to RGGH on github who (through his video) helped me understand how to make websockets
  * in rust.
  */
-
-
-use log::info;
-use std::time::Duration;
-use tokio::time;
+use log::{info, trace, warn, debug};
+use tokio::sync::Mutex;
 use futures::SinkExt;
 use tokio::net::TcpListener;
-use tokio_tungstenite::{accept_async, tungstenite::Utf8Bytes};
+use tokio_tungstenite::{accept_async, tungstenite::Utf8Bytes, WebSocketStream};
 use futures::StreamExt;
-use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::tungstenite::{self, Message};
+use std::sync::Arc;
+use std::collections::HashMap;
 
+
+mod info;
+
+#[warn(missing_docs)]
+
+/// transmit element of a stream
+pub type Tx = futures::stream::SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>;
+
+/// list of clients using ClineType
+pub type ClientTxGroup = Arc<Mutex<HashMap<usize, Client>>>;
+
+/// enum for the type of client connected, relays will be sent messages regaurdless of the
+/// channel, while clients are only sent ones in their matching channel 
+#[derive(PartialEq, Debug)] // to do `==` comparisons
+enum ClientType {
+    RELAY,
+    CLIENT,
+}
+
+/// Struct for standardizing clients, expected to be mutable
+#[derive(Debug)]
+pub struct Client {
+    transmit: Tx,
+    activechannel: u8, // make sure the struct is mutable
+    config: ClientType,
+}
+
+impl Client {
+    /// see transmit.send
+    pub async fn send(&mut self, msg: Message) -> Result<(), tungstenite::Error> {
+        self.transmit.send(msg).await
+    }
+}
+ 
 #[tokio::main]
 async fn main() {
+    let level = env_logger::Env::default().filter_or("RUST_LOG", "info");
     // Initialize logger
-    env_logger::init();
+    env_logger::Builder::from_env(level).init();
+    info!("Starting up...");
+
 
     let addr = "127.0.0.1:8080";
     info!("WebSocket server started and listening on port 8080");
     let listener = TcpListener::bind(addr).await.unwrap();
+    
+    let clients: ClientTxGroup = Arc::new(Mutex::new(HashMap::new()));
+    let lastindex = Arc::new(Mutex::new(0usize));
+
     while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(handle_client(stream));
+        tokio::spawn(handle_client(stream, clients.clone(), lastindex.clone()));
     }
 }
 
-async fn handle_client(stream: tokio::net::TcpStream) {
-    let ws_stream = accept_async(stream).await.unwrap();
-    let (mut write, mut read) = ws_stream.split();
-    info!("New WebSocket connection established");
+/// struct for a relay message
+pub struct RelayMessage {
+    content: String,
+    channel: u8
+}
 
-    // Create a task to periodically send updates
-    tokio::spawn(async move {
-        let mut message = 0;
-        let mut interval = time::interval(Duration::from_secs(3));
+/// broadcast message to all connected clients with matching channel
+pub async fn broadcast(clients: &ClientTxGroup, message: RelayMessage) {
+    let msg = Message::Text(Utf8Bytes::from(message.content));
+    debug!("broadcasting message: {}", msg);
+
+    let mut to_remove: Vec<usize> = vec![]; // broken clients
         
-        loop {
-            interval.tick().await;
-            message += 1;
-            let message = format!("Sending message: {} {}", message, "th message!");
-            let encoded = Utf8Bytes::from(message);
-            
-            if write.send(Message::Text(encoded)).await.is_err() {
-                break;
-            }
+    let mut clients_guard = clients.lock().await;
+    // send message to every client
+    for (id, client) in clients_guard.iter_mut() {
+        if client.config == ClientType::CLIENT && client.activechannel != message.channel {
+            continue;
+        } 
+        if client.send(msg.clone()).await.is_err() {
+            to_remove.push(*id);
         }
+    }
+    
+    // log broken clients
+    if to_remove.len() > 0 {
+        info!("dropping {} broken clients after broadcast", to_remove.len());
+    }
+
+    // remove broken clients
+    for id in to_remove {
+        clients_guard.remove(&id);
+    }
+
+}
+
+/// Append a client to the list of clients.
+/// Expects a transmit element of a stream and the last appeneded index (for hashmap) as well as the client group (borrowed)
+pub async fn append_client(tx: Tx, clients: &ClientTxGroup, mut lastindex: usize) -> usize {
+    debug!("adding client to list");
+    lastindex += 1; 
+    let mut locked = clients.lock().await;
+    locked.insert(lastindex, Client { 
+        transmit: tx,
+        activechannel: 0,
+        config: ClientType::CLIENT, 
     });
+
+    lastindex
+}
+
+/// handler for after a client connects
+async fn handle_client(stream: tokio::net::TcpStream, clients: ClientTxGroup, lastindex: Arc<Mutex<usize>>) {
+    let ws_stream = accept_async(stream).await.unwrap();
+    let (write, mut read) = ws_stream.split();
+    info!("New WebSocket connection established");
+    
+    let mut i = lastindex.lock().await;
+    *i += 1;
+    
+    append_client(write, &clients, *i).await;
+    drop(i); // we really need efficiency here
+    
+    debug!("New client joined.");
+    broadcast(&clients, RelayMessage { content: "New Client joined YAyyyy".to_string(), channel: 0 }).await;
 
     // Handle incoming messages (if necessary)
     while let Some(Ok(msg)) = read.next().await {
