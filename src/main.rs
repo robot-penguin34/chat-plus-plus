@@ -58,8 +58,8 @@ async fn main() {
     info!("Starting up...");
 
 
-    let addr = "127.0.0.1:8080";
-    info!("WebSocket server started and listening on port 8080");
+    let addr = "127.0.0.1:9000"; // if you get opcode or frame errors change the port
+    info!("WebSocket server started and listening on {}", addr);
     let listener = TcpListener::bind(addr).await.unwrap();
     
     let clients: ClientTxGroup = Arc::new(Mutex::new(HashMap::new()));
