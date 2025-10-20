@@ -27,11 +27,6 @@ mod broadcaster;
 
 const MAX_MPSC_BUFF: usize = 30; // maximum messages a client can ignore before it crashes
 
-/// transmit element of a stream
-pub type Tx = futures::stream::SplitSink<WebSocketStream<tokio::net::TcpStream>, Message>;
-
-/// list of clients using ClineType
-pub type ClientTxGroup = Arc<Mutex<HashMap<usize, Client>>>;
 
 /// enum for the type of client connected, relays will be sent messages regaurdless of the
 /// channel, while clients are only sent ones in their matching channel 
@@ -42,20 +37,6 @@ enum ClientType {
     CLIENT,
 }
 
-/// Struct for standardizing clients, expected to be mutable
-#[derive(Debug)]
-pub struct Client {
-    transmit: Tx,
-    activechannel: u8, // make sure the struct is mutable
-    config: ClientType,
-}
-
-impl Client {
-    /// see transmit.send
-    pub async fn send(&mut self, msg: Message) -> Result<(), tungstenite::Error> {
-        self.transmit.send(msg).await
-    }
-}
  
 #[tokio::main]
 async fn main() {
@@ -67,12 +48,10 @@ async fn main() {
     info!("WebSocket server started and listening on {}", addr);
     let listener = TcpListener::bind(addr).await.unwrap();
     
-    let mut senders = Arc::new(RwLock::new(Vec::new()));
-    let clients: ClientTxGroup = Arc::new(Mutex::new(HashMap::new()));
-    let lastindex = Arc::new(Mutex::new(0usize));
+    let senders = Arc::new(RwLock::new(Vec::new()));
 
     while let Ok((stream, _)) = listener.accept().await {
-        let (mut sender, mut reciever): (mpsc::Sender<RelayMessage>, mpsc::Receiver<RelayMessage>) = mpsc::channel(MAX_MPSC_BUFF);
+        let (sender, reciever): (mpsc::Sender<RelayMessage>, mpsc::Receiver<RelayMessage>) = mpsc::channel(MAX_MPSC_BUFF);
         senders.write().await.push(sender);
 
         tokio::spawn(handle_client(stream, reciever, senders.clone()));
@@ -113,56 +92,41 @@ async fn handle_client(stream: tokio::net::TcpStream, mut events: Receiver<Relay
 
     let (mut write, mut read) = ws_stream.split();
     info!("New WebSocket connection established");
-    
+
     match broadcast(eventgroup.clone(), RelayMessage { content: "New Client joined YAyyyy".to_string(), channel: 0 }).await {
         Ok(_) => {},
         Err(e) => {warn!("client disconnected with error: {:?}", e); return;}
     }
-    
-    
-    loop {
-        select! {
-            msg = events.recv() => {
-            if let Some(msg) = msg {
-                write.send(Message::from(msg.content)).await.unwrap();
-            } else {
-                break; // events channel closed
-            }
-        },
-        msg = read.next() => {
-            if let Some(msg) = msg {
-                match msg {
-                    Ok(Message::Close(_)) => break,
-                    Ok(Message::Ping(_)) => info!("pinged"),
-                    Ok(Message::Text(ref m)) => {
-                        debug!("Sending message");
-                        match broadcast(eventgroup.clone(), RelayMessage { content: m.to_string(), channel: 0 }).await {
-                            Ok(_) => {},
-                            Err(_e) => warn!("Failed to send message!"),
-                        }
-                    },
-                    Err(e) => warn!("Error receiving client's message: {:?}", e),
-                    _ => info!("message of other type received"),
+        loop {
+            select! {
+                msg = events.recv() => {
+                if let Some(msg) = msg {
+                    write.send(Message::from(msg.content)).await.unwrap();
+                } else {
+                    break; // events channel closed
                 }
-            } else {
-                break; // read stream ended
+            },
+            msg = read.next() => {
+                if let Some(msg) = msg {
+                    match msg {
+                        Ok(Message::Close(_)) => break,
+                        Ok(Message::Ping(_)) => info!("pinged"),
+                        Ok(Message::Text(ref m)) => {
+                            debug!("Sending message");
+                            match broadcast(eventgroup.clone(), RelayMessage { content: m.to_string(), channel: 0 }).await {
+                                Ok(_) => {},
+                                Err(_e) => warn!("Failed to send message!"),
+                            }
+                        },
+                        Err(e) => warn!("Error receiving client's message: {:?}", e),
+                        _ => info!("message of other type received"),
+                    }
+                } else {
+                    break; // read stream ended
+                }
             }
         }
     }
-}
-    
-    // Handle incoming messages (if necessary)
-    while let Some(msg) = read.next().await {
-        // In this example, we don't need to handle incoming messages
-        match msg {
-            Ok(Message::Close(_)) => break,
-            Ok(Message::Ping(_)) => info!("pinged"),
-            Ok(Message::Text(ref m)) => info!("message from client: {}", m),
-            Err(e) => warn!("Error recieving client's message: {:?}", e),
-            _ => info!("message of other type recieved"),
-        }
-    }
-
     debug!("Client disconnected.");
 }
 
