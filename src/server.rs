@@ -1,20 +1,17 @@
 use log::{info, warn, debug};
-use tokio::sync::Mutex;
 use futures::SinkExt;
 use tokio::net::TcpListener;
-use tokio_tungstenite::{accept_async, WebSocketStream};
+use tokio_tungstenite::{accept_async};
 use futures::StreamExt;
-use tokio_tungstenite::tungstenite::{self, Message};
+use tokio_tungstenite::tungstenite::{Message};
 use std::sync::Arc;
-use std::collections::HashMap;
-use tokio::sync::mpsc;
-use tokio::sync::mpsc::{Receiver, Sender};
-use tokio::sync::RwLock;
+use tokio::sync::broadcast::{Sender, Receiver};
+use tokio::sync::broadcast;
 use tokio::select;
 
 use crate::messages::RelayMessage;
 
-const MAX_MPSC_BUFF: usize = 30; // maximum messages a client can ignore before it crashes
+const MAX_CHANNEL_BUFF: usize = 100; // maximum messages a client can ignore before it crashes
 
 /// enum for the type of client connected, relays will be sent messages regaurdless of the
 /// channel, while clients are only sent ones in their matching channel 
@@ -27,14 +24,16 @@ enum ClientType {
 
 /// An instance of the actual chat++ server. Intended to be spawned in main.
 pub struct Server {
-    senders: Arc<RwLock<Vec<Sender<RelayMessage>>>>,
-    address: String
+    pub events: Arc<Sender<RelayMessage>>,
+    address: String,
 } 
 
 impl Server {
         pub fn new(address: String) -> Self {
+            let (tx, _) = broadcast::channel(MAX_CHANNEL_BUFF);
+            let tx = Arc::new(tx);
             Self {
-                senders: Arc::new(RwLock::new(Vec::new())),
+                events: tx,
                 address: address
             }
         }
@@ -50,17 +49,14 @@ impl Server {
 
             info!("WebSocket server started and listening on {}", addr);
             let listener = TcpListener::bind(addr).await.unwrap();
-
+            
             while let Ok((stream, _)) = listener.accept().await {
-                let (sender, reciever): (mpsc::Sender<RelayMessage>, mpsc::Receiver<RelayMessage>) = mpsc::channel(MAX_MPSC_BUFF);
-                self.senders.write().await.push(sender);
-
-                tokio::spawn(Self::handle_client(stream, reciever, self.senders.clone()));
+                let events = self.events.clone();
+                tokio::spawn(Self::handle_client(stream, events.subscribe(), events));
             }
-
     }
 
-    async fn handle_client(stream: tokio::net::TcpStream, mut events: Receiver<RelayMessage>, eventgroup: Arc<RwLock<Vec<Sender<RelayMessage>>>>) {
+    async fn handle_client(stream: tokio::net::TcpStream, mut rx: Receiver<RelayMessage>, tx: Arc<Sender<RelayMessage>>) {
         let ws_stream = match accept_async(stream).await {
             Ok(ws) => ws,
             Err(e) => {
@@ -71,20 +67,14 @@ impl Server {
 
         let (mut write, mut read) = ws_stream.split();
         info!("New WebSocket connection established");
-
-        match Self::broadcast(eventgroup.clone(), RelayMessage { content: "New Client joined YAyyyy".to_string(), channel: 0 }).await {
-            Ok(_) => {},
-            Err(e) => {warn!("client disconnected with error: {:?}", e); return;}
-        }
+        
         loop {
             select! {
-                msg = events.recv() => {
-                if let Some(msg) = msg {
-                    //TODO: logic to exclude messages they shouldn't have...
-                    write.send(Message::from(msg.content)).await.unwrap();
-                } else {
-                    break; // events channel closed
-                }
+                msg = rx.recv() => {
+                    match msg {
+                        Ok(m) => write.send(Message::from(m.content)).await.unwrap(),
+                        Err(_) => {warn!("Client hit message buffer limit! Consider scaling. Kicking client to reduce load."); break;}
+                    }
             },
             msg = read.next() => {
                 if let Some(msg) = msg {
@@ -97,9 +87,11 @@ impl Server {
                                 break; 
                             }
                             debug!("Sending message");
-                            match Self::broadcast(eventgroup.clone(), RelayMessage { content: m.to_string(), channel: 0 }).await {
+                            match tx.send(RelayMessage { 
+                                content: "NEW MESSAGE YOOOO".to_string(), channel: 0 
+                            }) {
                                 Ok(_) => {},
-                                Err(_e) => warn!("Failed to send message!"),
+                                Err(e) => {warn!("Error sending message: {}", e)}
                             }
                         },
                         Err(e) => warn!("Error receiving client's message: {:?}", e),
@@ -112,19 +104,5 @@ impl Server {
             }
         }
         info!("Client disconnected.");
-    }
-
-    pub async fn broadcast(broadcastgroup: Arc<RwLock<Vec<Sender<RelayMessage>>>>, message: RelayMessage) 
-        -> Result<(), tokio::sync::mpsc::error::SendError<RelayMessage>>{
-        let snapshot = {
-            let r = broadcastgroup.read().await;
-            r.clone() // sorry for memory efficiency, but dang could that take forever
-        };
-
-        for tx in snapshot {
-            tx.send(message.clone()).await?;
-        }
-
-        Ok(())
     }
 }
