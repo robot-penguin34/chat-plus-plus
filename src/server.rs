@@ -9,7 +9,7 @@ use tokio::sync::broadcast::{Sender, Receiver};
 use tokio::sync::broadcast;
 use tokio::select;
 
-use crate::messages::RelayMessage;
+use crate::messages::{self, RelayMessage};
 
 const MAX_CHANNEL_BUFF: usize = 100; // maximum messages a client can ignore before it crashes
 
@@ -83,16 +83,10 @@ impl Server {
                         Ok(Message::Ping(_)) => info!("pinged"),
                         Ok(Message::Text(ref m)) => {
                             if m.len() > 3000 { 
-     
                                 break; 
                             }
-                            debug!("Sending message");
-                            match tx.send(RelayMessage { 
-                                content: "NEW MESSAGE YOOOO".to_string(), channel: 0 
-                            }) {
-                                Ok(_) => {},
-                                Err(e) => {warn!("Error sending message: {}", e)}
-                            }
+                            debug!("handling message");
+                            messages::parse_command(tx.clone(), m, None).await;
                         },
                         Err(e) => warn!("Error receiving client's message: {:?}", e),
                         _ => info!("message of other type received"),
