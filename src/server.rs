@@ -71,6 +71,7 @@ impl Server {
         info!("New WebSocket connection established");
         
         let user: User = {
+            // authenticate the user based on socket messages
             let m = read.next().await;
             let msg: Result<Message, _>;
             match m {
@@ -98,6 +99,7 @@ impl Server {
 
             user
         };
+        let _ = write.send(Message::from("Successfully Authenticated! Welcome.")).await;
 
         loop {
             select! {
