@@ -9,6 +9,7 @@ use tokio::sync::broadcast::{Sender, Receiver};
 use tokio::sync::broadcast;
 use tokio::select;
 
+use crate::authentication::{self, authenticate_ws, User};
 use crate::messages::{self, RelayMessage};
 
 const MAX_CHANNEL_BUFF: usize = 100; // maximum messages a client can ignore before it crashes
@@ -65,9 +66,38 @@ impl Server {
             }
         };
 
+
         let (mut write, mut read) = ws_stream.split();
         info!("New WebSocket connection established");
         
+        let user: User = {
+            let m = read.next().await;
+            let msg: Result<Message, _>;
+            match m {
+                Some(res) => msg = res,
+                None => return,
+            }
+
+            let challenge: String;
+            match msg {
+                Ok(Message::Text(ref msg)) => {
+                    if msg.len() > 2000 {
+                        return;
+                    }
+                    challenge = msg.to_string();
+                }
+                _ => { return; }
+            }
+
+            let user: User;
+            match authenticate_ws(challenge) {
+                Ok(result) => user = result,
+                Err(_) => return,
+            }
+
+            user
+        };
+
         loop {
             select! {
                 msg = rx.recv() => {

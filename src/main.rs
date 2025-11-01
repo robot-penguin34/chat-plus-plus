@@ -10,6 +10,7 @@ use server::Server;
 
 mod messages;
 mod server;
+mod authentication;
 
 #[warn(missing_docs)]
  

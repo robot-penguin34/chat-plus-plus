@@ -15,7 +15,7 @@ pub async fn parse_command(tx: Arc<Sender<RelayMessage>>, message: &Utf8Bytes, s
     };
     
     match command {
-        "message" => handle_send_message(tx, msg.to_string()).await?,
+        "MESSAGE" => handle_send_message(tx, msg.to_string()).await?,
         _ => return Err(()),
     }
     
