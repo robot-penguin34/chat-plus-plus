@@ -75,13 +75,14 @@ impl Server {
             let msg: Result<Message, _>;
             match m {
                 Some(res) => msg = res,
-                None => return,
+                None => {let _ = write.send(Message::from("Error authenticating")).await; return;},
             }
 
             let challenge: String;
             match msg {
                 Ok(Message::Text(ref msg)) => {
                     if msg.len() > 2000 {
+                        let _ = write.send(Message::from("Message is too long! (>2000)")).await;
                         return;
                     }
                     challenge = msg.to_string();
