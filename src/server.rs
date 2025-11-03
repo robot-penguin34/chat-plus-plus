@@ -9,7 +9,7 @@ use tokio::sync::broadcast::{Sender, Receiver};
 use tokio::sync::broadcast;
 use tokio::select;
 
-use crate::authentication::{self, authenticate_ws, User};
+use crate::authentication::{authenticate_ws, User};
 use crate::messages::{self, RelayMessage};
 
 const MAX_CHANNEL_BUFF: usize = 100; // maximum messages a client can ignore before it crashes
@@ -38,7 +38,7 @@ impl Server {
                 address: address
             }
         }
-        
+
         /// run the server, MAKE SURE YOU INSTANTIATE ALL PARAMETERS with Server::new("".to_string());
         pub async fn run(mut self) {
             info!("Starting server...");
