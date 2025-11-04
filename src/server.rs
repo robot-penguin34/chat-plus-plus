@@ -4,13 +4,15 @@ use tokio::net::TcpListener;
 use tokio_tungstenite::{accept_async};
 use futures::StreamExt;
 use tokio_tungstenite::tungstenite::{Message};
-use std::sync::Arc;
 use tokio::sync::broadcast::{Sender, Receiver};
 use tokio::sync::broadcast;
+use tokio::sync::{Mutex};
+use std::sync::Arc;
 use tokio::select;
 
 use crate::authentication::{authenticate_ws, User};
 use crate::messages::{self, RelayMessage};
+use crate::messages::CommandParseErr;
 
 const MAX_CHANNEL_BUFF: usize = 100; // maximum messages a client can ignore before it crashes
 
@@ -99,13 +101,21 @@ impl Server {
 
             user
         };
-        let _ = write.send(Message::from("Successfully Authenticated! Welcome.")).await;
+        let active_channel: Arc<Mutex<u8>> = Arc::new(Mutex::new(0)); 
+        // send welome message on successful authentication attempt
+        let _ = write.send(Message::from("Successfully Authenticated! Welcome. you are currently in channel 0")).await;
 
         loop {
             select! {
                 msg = rx.recv() => {
                     match msg {
-                        Ok(m) => write.send(Message::from(m.content)).await.unwrap(),
+                        Ok(m) => {
+                            let chann_now = active_channel.lock().await;
+                            if m.channel != *chann_now { break; }
+                            //TODO: don't relay the message if there is a recipient and this isn't
+                            // a relay or the recipient
+                            write.send(Message::from(m.content)).await.unwrap();
+                        },
                         Err(_) => {warn!("Client hit message buffer limit! Consider scaling. Kicking client to reduce load."); break;}
                     }
             },
@@ -119,7 +129,19 @@ impl Server {
                                 break; 
                             }
                             debug!("handling message");
-                            messages::parse_command(tx.clone(), m, None).await;
+                            match messages::parse_command(tx.clone(), m, None, &active_channel).await {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    // send the client the error message if it exists
+                                    if e.message != "".to_string() {
+                                        let _ = write.send(Message::from(e.message)).await;
+                                    }
+                                    // disconnect if the error is fatal
+                                    if e.fatal {
+                                        return;
+                                    }
+                                },
+                            }
                         },
                         Err(e) => warn!("Error receiving client's message: {:?}", e),
                         _ => info!("message of other type received"),
