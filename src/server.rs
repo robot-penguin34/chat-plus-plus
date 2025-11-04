@@ -1,7 +1,9 @@
+use futures::stream::SplitStream;
 use log::{info, warn, debug};
 use futures::SinkExt;
 use tokio::net::TcpListener;
-use tokio_tungstenite::{accept_async};
+use tokio::net::TcpStream;
+use tokio_tungstenite::{accept_async, WebSocketStream};
 use futures::StreamExt;
 use tokio_tungstenite::tungstenite::{Message};
 use tokio::sync::broadcast::{Sender, Receiver};
@@ -72,35 +74,14 @@ impl Server {
         let (mut write, mut read) = ws_stream.split();
         info!("New WebSocket connection established");
         
-        let user: User = {
-            // authenticate the user based on socket messages
-            let m = read.next().await;
-            let msg: Result<Message, _>;
-            match m {
-                Some(res) => msg = res,
-                None => {let _ = write.send(Message::from("Error authenticating")).await; return;},
+        let user: User = match Self::handle_login(&mut read).await {
+            Ok(res) => { res },
+            Err(m) => {
+                let _ = write.send(Message::from(m)).await; // ignore errors with _ 
+                return;
             }
-
-            let challenge: String;
-            match msg {
-                Ok(Message::Text(ref msg)) => {
-                    if msg.len() > 2000 {
-                        let _ = write.send(Message::from("Message is too long! (>2000)")).await;
-                        return;
-                    }
-                    challenge = msg.to_string();
-                }
-                _ => { return; }
-            }
-
-            let user: User;
-            match authenticate_ws(challenge) {
-                Ok(result) => user = result,
-                Err(_) => return,
-            }
-
-            user
         };
+
         let active_channel: Arc<Mutex<u8>> = Arc::new(Mutex::new(0)); 
         // send welome message on successful authentication attempt
         let _ = write.send(Message::from("Successfully Authenticated! Welcome. you are currently in channel 0")).await;
@@ -163,5 +144,34 @@ impl Server {
             }
         }
         info!("Client disconnected.");
+    }
+    
+    async fn handle_login(read: &mut SplitStream<WebSocketStream<TcpStream>>) -> Result<User, String> {
+        // the first mesage from the user is expected to be an authentication attempt
+        let m = read.next().await;
+        let msg: Result<Message, _>;
+        match m {
+            Some(res) => msg = res,
+            None => return Err("Internal Serval Error".to_string()),
+        }
+
+        let challenge: String;
+        match msg {
+            Ok(Message::Text(ref msg)) => {
+                if msg.len() > 2000 {
+                    return Err("challenge is too long!!!".to_string());
+                }
+                challenge = msg.to_string();
+            }
+            _ => { return Err("Unexpected challenge type. Expected a string".to_string()); }
+        }
+
+        let user: User;
+        match authenticate_ws(challenge) {
+            Ok(result) => user = result,
+            Err(e) => return Err(format!("Error authenticating: {}", e).to_string()),
+        }
+
+        Ok(user)
     }
 }
