@@ -1,8 +1,11 @@
+use serde::{Deserialize, Serialize};
 use tokio_tungstenite::tungstenite::{Utf8Bytes};
 use log::{debug, info, warn};
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use tokio::sync::broadcast::Sender;
+
+use crate::authentication::User;
 
 pub struct CommandParseErr {
     pub message: String,
@@ -34,6 +37,7 @@ pub async fn parse_command(
         message: &Utf8Bytes,
         sender: Option<MessageSender>,
         active_channel: &Arc<Mutex<u8>>,
+        user: &User
     ) -> Result<(), CommandParseErr> {
 
     debug!("Handling client request");
@@ -45,7 +49,7 @@ pub async fn parse_command(
     match command {
         // commands that the client doesn't recognize just become a message
         // if they are a default one it gets translated to one of these
-        "MESSAGE" => handle_send_message(tx, msg.to_string()).await?,
+        "MESSAGE" => handle_send_message(tx, msg.to_string(), user).await?,
         "JOIN" => {
             let channel: u8 = {
                 let tmp_str = msg.to_string();
@@ -65,25 +69,30 @@ pub async fn parse_command(
         "TOPIC" => todo!(), // set the channel topic
         "DM" => todo!(),
         "QUERY" => todo!(), // get info
+        "RELAY" => todo!(), //TODO
         _ => return Err("unrecognized command".to_string().into()),
     }
     
     Ok(())
 }
 
-pub async fn handle_send_message(tx: Arc<Sender<RelayMessage>>, content: String) -> Result<(), String>{
-    //TODO: get the sender
+pub async fn handle_send_message(tx: Arc<Sender<RelayMessage>>, content: String, user: &User) -> Result<(), String>{
+    let raw: RawMessage = match serde_json::from_str(&content) {
+        Ok(res) => { res },
+        Err(e) => { return Err(format!("Bad input: {}", e).to_string()) }
+    };
+
     let sender = MessageSender {
-        username: "debug".to_string(),
-        last_hop: "root".to_string(),
+        username: user.username.clone(),
+        last_hop: "root".to_string(), //TODO
         claimed_first_hop: None
     };
 
     let message = RelayMessage {
-        content: content,
-        channel: 0,
+        content: raw.content,
+        channel: raw.channel,
+        recipient: raw.recipient,
         sender: sender,
-        recipient: None,
     };
 
     match tx.send(message) {
@@ -94,8 +103,16 @@ pub async fn handle_send_message(tx: Arc<Sender<RelayMessage>>, content: String)
     Ok(())
 }
 
+/// struct to eventually be converted to a RelayMessage
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawMessage {
+   pub content: String,
+   pub channel: u8,
+   pub recipient: Option<MessageSender>
+}
+
 /// struct for a relay message
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RelayMessage {
     pub content: String,
     pub channel: u8,
@@ -103,7 +120,7 @@ pub struct RelayMessage {
     pub recipient: Option<MessageSender>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageSender {
     username: String,
     last_hop: String, //TODO verify this with either JWT signin or pub/priv key signage

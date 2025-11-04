@@ -114,7 +114,15 @@ impl Server {
                             if m.channel == *chann_now {  
                                 //TODO: don't relay the message if there is a recipient and this isn't
                                 // a relay or the recipient
-                                write.send(Message::from(m.content)).await.unwrap();
+                                let json: String;
+                                match serde_json::to_string(&m) {
+                                    Ok(res) => { json = res },
+                                    Err(e) => {
+                                        warn!("CRITICAL ALERT: message was unable to be converted to json! something bad could be going on!!! Error: {}", e);
+                                        continue;
+                                    },
+                                };
+                                write.send(Message::from(json)).await.unwrap();
                             }
                         },
                         Err(_) => {warn!("Client hit message buffer limit! Consider scaling. Kicking client to reduce load."); break;}
@@ -130,7 +138,7 @@ impl Server {
                                 break; 
                             }
                             debug!("handling message");
-                            match messages::parse_command(tx.clone(), m, None, &active_channel).await {
+                            match messages::parse_command(tx.clone(), m, None, &active_channel, &user).await {
                                 Ok(_) => { debug!("command parse success") },
                                 Err(e) => {
                                     // send the client the error message if it exists

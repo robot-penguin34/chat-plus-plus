@@ -4,6 +4,6 @@ pub fn authenticate_ws(challenge: String) -> Result<User, ()> {
 }
 
 pub struct User {
-    username: String,
-    description: String,
+    pub username: String,
+    pub description: String,
 }
