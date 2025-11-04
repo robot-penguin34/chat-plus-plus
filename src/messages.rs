@@ -51,11 +51,13 @@ pub async fn parse_command(
                 let tmp_str = msg.to_string();
                 match tmp_str.parse::<u8>() {
                     Err(_) => {
+                        debug!("Client sent bad channel id");
                         return Err("Bad channel id, expected unsigned 8-bit int".to_string().into());
                     }
-                    Ok(res) => { res },
+                    Ok(res) => { debug!("client joining {}", res); res },
                 }
             };
+            info!("Client joined channel {}", channel);
             *active_channel.lock().await = channel;
         },
         "QUIT" => todo!(),

@@ -111,10 +111,11 @@ impl Server {
                     match msg {
                         Ok(m) => {
                             let chann_now = active_channel.lock().await;
-                            if m.channel != *chann_now { break; }
-                            //TODO: don't relay the message if there is a recipient and this isn't
-                            // a relay or the recipient
-                            write.send(Message::from(m.content)).await.unwrap();
+                            if m.channel == *chann_now {  
+                                //TODO: don't relay the message if there is a recipient and this isn't
+                                // a relay or the recipient
+                                write.send(Message::from(m.content)).await.unwrap();
+                            }
                         },
                         Err(_) => {warn!("Client hit message buffer limit! Consider scaling. Kicking client to reduce load."); break;}
                     }
@@ -130,15 +131,16 @@ impl Server {
                             }
                             debug!("handling message");
                             match messages::parse_command(tx.clone(), m, None, &active_channel).await {
-                                Ok(_) => {},
+                                Ok(_) => { debug!("command parse success") },
                                 Err(e) => {
                                     // send the client the error message if it exists
                                     if e.message != "".to_string() {
-                                        let _ = write.send(Message::from(e.message)).await;
+                                        let _ = write.send(Message::from(e.message.clone())).await;
                                     }
                                     // disconnect if the error is fatal
                                     if e.fatal {
-                                        return;
+                                        warn!("Disconnected client due to fatal issue: {}", e.message);
+                                        break;
                                     }
                                 },
                             }
